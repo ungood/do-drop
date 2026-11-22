@@ -16,8 +16,6 @@ Done means `mise run ci` passes. The tests run the whole flow in workerd, includ
 
 Every merge to `main` deploys to production: the Push to Main workflow runs CI and then `mise run deploy`. Don't merge anything that isn't ready to ship.
 
-Every merge to `main` deploys to production: the Push to Main workflow runs CI and then `mise run deploy`. Don't merge anything that isn't ready to ship.
-
 ## Layout
 
 - `src/index.ts`: the Worker (OAuth provider and routing) and the `Drop` Durable Object (storage, MCP, public post, expiry alarm, sign-in lockout, debug).

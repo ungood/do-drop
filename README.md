@@ -83,19 +83,7 @@ To set it up:
 2. Copy your account ID from the Workers & Pages overview page.
 3. In the GitHub repo, go to **Settings**, then **Environments**, and create an environment named `production`. Add the secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Optionally, add yourself as a required reviewer to approve each deploy, and limit the environment to the `main` branch.
 
-You still set `OWNER_PASSWORD` once with `wrangler secret put` (step 3 of [Deploy](#deploy)). After that, merging is deploying.
-
-## Continuous deployment
-
-Every merge to `main` deploys. The Push to Main workflow runs CI, then a `deploy` job in the `production` environment runs `mise run deploy`. `SECRET` and `POST_TOKEN` stay in Cloudflare; a deploy doesn't change them.
-
-To set it up:
-
-1. In the Cloudflare dashboard, go to **My Profile**, then **API Tokens**, then **Create Token**, and use the **Edit Cloudflare Workers** template. Limit it to your account and save the token in your password manager.
-2. Copy your account ID from the Workers & Pages overview page.
-3. In the GitHub repo, go to **Settings**, then **Environments**, and create an environment named `production`. Add the secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. Optionally, add yourself as a required reviewer to approve each deploy, and limit the environment to the `main` branch.
-
-You still create `SECRET` and `POST_TOKEN` once with `wrangler secret put` (step 3 of [Deploy](#deploy)). After that, merging is deploying.
+You still set `OWNER_PASSWORD` once, with `wrangler secret put` (step 3 of [Deploy](#deploy)) or in the Cloudflare dashboard under the Worker's **Settings**, **Variables and Secrets**, as a **Secret**. After that, merging is deploying.
 
 ## Connect it to Claude
 
