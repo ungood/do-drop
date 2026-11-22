@@ -1,17 +1,20 @@
 name = "do-drop"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
-# The OAuth library fetches clients' metadata documents; this keeps those
-# fetches on the public internet.
-compatibility_flags = ["global_fetch_strictly_public"]
+# global_fetch_strictly_public: the OAuth library fetches clients' metadata
+# documents; this keeps those fetches on the public internet.
+# enable_request_signal, request_signal_passthrough: request.signal fires when
+# a client hangs up, and reaches the Durable Object, so abandoned waits end.
+compatibility_flags = ["global_fetch_strictly_public", "enable_request_signal", "request_signal_passthrough"]
 # Serve at do-drop.<subdomain>.workers.dev, with no per-version preview URLs.
 workers_dev = true
 preview_urls = false
 
 [vars]
 # Seconds between progress pings while a wait is open. Must stay well under
-# the client's idle timeout (5 minutes for remote MCP).
-PING_SECONDS = "60"
+# the shortest client timeout: Claude Code gives up on a call after 60 s
+# unless something resets its timer.
+PING_SECONDS = "20"
 
 [[durable_objects.bindings]]
 name = "DROP"

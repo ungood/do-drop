@@ -442,13 +442,13 @@ export class Drop extends DurableObject<Env> {
       case "tools/list":
         return rpcResult(id, { tools: TOOLS });
       case "tools/call":
-        return this.callTool(id, p, canStream);
+        return this.callTool(id, p, canStream, req.signal);
       default:
         return rpcError(id, -32601, `Method not found: ${m.method}`);
     }
   }
 
-  private async callTool(id: RpcId, p: Json, canStream: boolean): Promise<Json | Response> {
+  private async callTool(id: RpcId, p: Json, canStream: boolean, signal?: AbortSignal): Promise<Json | Response> {
     const name = String(p.name ?? "");
     const args = (p.arguments ?? {}) as Json;
     const meta = (p._meta ?? {}) as Json;
@@ -507,7 +507,7 @@ export class Drop extends DurableObject<Env> {
         });
         if (ready) return rpcResult(id, toolResult(ready));
         if (!canStream) return toolError(id, "wait can't block inside a JSON-RPC batch");
-        return this.streamWait(id, key, from, minutes, progressToken);
+        return this.streamWait(id, key, from, minutes, progressToken, signal);
       }
     }
     return toolError(id, `Unknown tool: ${name}`);
@@ -520,6 +520,7 @@ export class Drop extends DurableObject<Env> {
     afterSeq: number,
     minutes: number,
     progressToken?: string | number,
+    signal?: AbortSignal,
   ): Response {
     // Buffer a few writes, so a slow reader doesn't hold the loop (and its waiter) on a ping.
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>(
@@ -538,6 +539,11 @@ export class Drop extends DurableObject<Env> {
       let outcome = "unknown";
       try {
         while (true) {
+          if (signal?.aborted) {
+            // The client hung up. Writes may still succeed into a buffer nobody reads, so stop here.
+            outcome = "client_gone";
+            break;
+          }
           // Check before every sleep, so a post that lands while a ping is being written isn't missed.
           if (!this.isOpen(key)) {
             outcome = "deleted";
@@ -566,7 +572,7 @@ export class Drop extends DurableObject<Env> {
             );
             break;
           }
-          if (await this.sleepOrWake(key, Math.min(pingMs, left))) continue;
+          if (await this.sleepOrWake(key, Math.min(pingMs, left), signal)) continue;
           if (Date.now() >= deadline) continue;
           pings++;
           const waited = Math.round((Date.now() - started) / 60_000);
@@ -603,14 +609,15 @@ export class Drop extends DurableObject<Env> {
     });
   }
 
-  /** Resolve after `ms` (false), or sooner if `key` is posted to or deleted (true). */
-  private sleepOrWake(key: string, ms: number): Promise<boolean> {
+  /** Resolve after `ms` (false), or sooner if `key` is posted to or deleted, or the client hangs up (true). */
+  private sleepOrWake(key: string, ms: number, signal?: AbortSignal): Promise<boolean> {
     return new Promise((resolve) => {
       let set = this.waiters.get(key);
       if (!set) this.waiters.set(key, (set = new Set()));
       const waiting = set;
       const finish = (woken: boolean) => {
         clearTimeout(timer);
+        signal?.removeEventListener("abort", wake);
         waiting.delete(wake);
         if (!waiting.size && this.waiters.get(key) === waiting) this.waiters.delete(key);
         resolve(woken);
@@ -618,6 +625,7 @@ export class Drop extends DurableObject<Env> {
       const wake = () => finish(true);
       const timer = setTimeout(() => finish(false), ms);
       waiting.add(wake);
+      signal?.addEventListener("abort", wake);
     });
   }
 
