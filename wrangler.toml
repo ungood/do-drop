@@ -4,6 +4,9 @@ compatibility_date = "2026-11-01"
 # The OAuth library fetches clients' metadata documents; this keeps those
 # fetches on the public internet.
 compatibility_flags = ["global_fetch_strictly_public"]
+# Serve at do-drop.<subdomain>.workers.dev, with no per-version preview URLs.
+workers_dev = true
+preview_urls = false
 
 [vars]
 # Seconds between progress pings while a wait is open. Must stay well under
