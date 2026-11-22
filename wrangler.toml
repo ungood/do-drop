@@ -1,19 +1,19 @@
 name = "do-drop"
 main = "src/index.ts"
-compatibility_date = "2025-11-01"
+compatibility_date = "2026-11-01"
 
 [vars]
-# Seconds between progress pings while wait_for_answers is open.
-# Must stay well under the client's idle timeout (5 minutes for remote MCP).
+# Seconds between progress pings while a wait is open. Must stay well under
+# the client's idle timeout (5 minutes for remote MCP).
 PING_SECONDS = "60"
 
 [[durable_objects.bindings]]
-name = "RELAY"
-class_name = "Relay"
+name = "DROP"
+class_name = "Drop"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["Relay"]
+new_sqlite_classes = ["Drop"]
 
-# SECRET is set with `npx wrangler secret put SECRET` (never commit it).
-# For local dev, put SECRET=... in a .dev.vars file.
+# SECRET (the MCP URL's path segment) and POST_TOKEN (the post-only REST
+# endpoint's) are secrets: set them with `pnpm exec wrangler secret put <NAME>`.

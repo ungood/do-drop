@@ -1,85 +1,121 @@
 # DO Drop
 
-MCP dead drop on a Durable Object: post from anywhere, and the waiting AI session gets it.
+A dead drop for AI sessions: post from anywhere, and the waiting session gets it.
 
-> **Status:** working prototype, still questionnaire-specific (tools `wait_for_answers` / `get_answers` / `submit_answers`). See CLAUDE.md for the plan to generalize it into `wait` / `post` / `get` / `delete`.
+DO Drop is a small remote MCP server. A Claude session calls `wait` on a key and blocks. A web page, phone shortcut, webhook or another session posts a JSON payload to that key, and the waiting call returns it, in the same session that asked.
 
-
-A small remote MCP server (currently the questionnaire prototype) that lets a Claude session wait for answers
-to a Questionnaire set and get them back in the same session.
-
-```
-session ──wait_for_answers(setId)──▶ relay   (held open; progress ping every 60 s)
-page    ──submit_answers(setId, …)──▶ relay   (Submit on the Questionnaire page)
-relay   ──answers────────────────────▶ session (the waiting call returns)
+```text
+session ──wait(key)──────────▶ DO Drop   (held open; progress ping every 60 s)
+page    ──post(key, payload)─▶ DO Drop   (MCP tool, or the REST endpoint)
+DO Drop ──payload────────────▶ session   (the waiting call returns)
 ```
 
-One Cloudflare Worker plus one SQLite-backed Durable Object. Every waiting
-call shares that one object, so run-time billing doesn't multiply with the
-number of waiting sessions.
+It runs as one Cloudflare Worker and one SQLite-backed Durable Object ("DO" Drop). Every wait shares that one object, so run-time billing doesn't multiply with the number of waiting sessions.
 
 ## Tools
 
-| tool | who calls it | what it does |
-|---|---|---|
-| `wait_for_answers(setId, maxWaitMinutes=360)` | the asking session | Blocks until the set is submitted and returns the answers. Returns `{"status":"waiting"}` if time runs out; call again to keep waiting. Returns at once if already submitted. |
-| `get_answers(setId)` | anyone | Non-blocking check: `submitted` with answers, or `not_submitted`. |
-| `submit_answers(setId, answers)` | the Questionnaire page | Stores the answers and wakes every call waiting on `setId`. |
+Each key holds an append-only list of messages. Every message gets a sequence number (`seq`) that is higher than any before it.
 
-The answers come back in the page's format: `{status, setId, submittedAt, answers: {questionId: {value, note, skipped, …}}, generalNote}`.
+| Tool                                        | What it does                                                                                                                                                                                                                                               |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wait(key, afterSeq=0, timeoutMinutes=360)` | Blocks until `key` has a message with a `seq` greater than `afterSeq`, then returns the oldest one with its `seq` and how many more are `pending`. Returns at once if one is already there, and `{"status":"timeout"}` if time runs out (max 720 minutes). |
+| `post(key, payload)`                        | Appends any JSON value (up to 200 KB), wakes every call waiting on the key, and returns `{seq, woke}`.                                                                                                                                                     |
+| `get(key, afterSeq?)`                       | Doesn't wait. Without `afterSeq`, returns the latest message; with it, the messages after it, oldest first, up to 50.                                                                                                                                      |
+| `delete(key)`                               | Deletes the key and its messages.                                                                                                                                                                                                                          |
+
+For a one-shot answer, call `wait(key)`. For a conversation, pass the last `seq` you saw as `afterSeq`, so nothing posted between calls is missed.
+
+A message looks like `{"seq": 7, "payload": {...}, "postedAt": "2026-11-22T17:00:00.000Z"}`. A key keeps its newest 100 messages and is deleted 14 days after its last post. Keys are 1 to 200 letters, digits or `. _ ~ : @ + -`.
+
+## REST endpoint
+
+Things that can't speak MCP can post with a plain HTTP request, using a separate post-only token:
+
+```bash
+curl -X POST "https://do-drop.<you>.workers.dev/<POST_TOKEN>/post/<key>" \
+  -H 'Content-Type: application/json' -d '{"done": true}'
+```
+
+A JSON body is stored as JSON; anything else is stored as a string. The response is `{"key", "seq", "woke"}`. The post token can't read, wait or reach the MCP endpoint, so it's safe to put in an iOS Shortcut, a Home Assistant `rest_command` or a webhook.
 
 ## Deploy
 
-```bash
-npm install
-npx wrangler login
-openssl rand -hex 24                 # copy the output; this is your SECRET
-npx wrangler secret put SECRET       # paste it
-npx wrangler deploy                  # prints https://do-drop.<you>.workers.dev
-```
+You need a Cloudflare account (the free plan is enough) and [mise](https://mise.jdx.dev).
 
-Your MCP endpoint is `https://do-drop.<you>.workers.dev/<SECRET>/mcp`.
-Anyone with that URL can call the relay, so treat it like a password.
+1. Install the tools and packages:
+
+   ```bash
+   mise run setup
+   ```
+
+2. Log in to Cloudflare. This opens a browser:
+
+   ```bash
+   pnpm exec wrangler login
+   ```
+
+3. Create the two secrets. Generate each with `openssl rand -hex 24`, save it in your password manager, then paste it when Wrangler asks. Use a different value for each.
+
+   ```bash
+   pnpm exec wrangler secret put SECRET
+   pnpm exec wrangler secret put POST_TOKEN
+   ```
+
+   The first `secret put` offers to create the Worker if it doesn't exist yet. Say yes.
+
+4. Deploy:
+
+   ```bash
+   mise run deploy
+   ```
+
+   Wrangler prints the Worker's URL, `https://do-drop.<you>.workers.dev`. If your account has no `workers.dev` subdomain yet, it asks you to pick one.
+
+5. Run the smoke test against the deployment:
+
+   ```bash
+   DROP_URL=https://do-drop.<you>.workers.dev DROP_SECRET=<SECRET> DROP_POST_TOKEN=<POST_TOKEN> mise run smoke
+   ```
+
+   Add `POST_AFTER_MS=75000` to hold the wait past one 60-second progress ping and check that pings get through. The test deletes its key when it's done.
+
+Your MCP endpoint is `https://do-drop.<you>.workers.dev/<SECRET>/mcp`. Anyone with that URL can read and post to every key, so treat it like a password. To rotate a token, run `secret put` again; the change applies without a redeploy.
 
 ## Connect it to Claude
 
-claude.ai → Settings → Connectors → **Add custom connector**
+claude.ai, then Settings, Connectors, **Add custom connector**:
 
-- Name: **Questionnaire Relay** (exactly this; the page calls the connector by name)
-- URL: the MCP endpoint above
-- No OAuth
+- **Name:** DO Drop
+- **URL:** the MCP endpoint above
+- **Auth:** none (the secret is in the URL)
 
-The first time you press Submit on the Questionnaire page, claude.ai asks
-whether the page may use Questionnaire Relay. Allow it.
+For Claude Code, add it as a remote HTTP server:
+
+```bash
+claude mcp add --transport http do-drop "https://do-drop.<you>.workers.dev/<SECRET>/mcp"
+```
 
 ## Debugging
 
-`https://do-drop.<you>.workers.dev/<SECRET>/debug` shows which
-calls are waiting right now and the last 100 events: initializes (with the
-client's name), waits starting (including whether the client sent a
-progress token), submits (and how many waiting calls they woke), and waits
-ending (`answered`, `timeout` or `client_gone`, with duration).
+`https://do-drop.<you>.workers.dev/<SECRET>/debug` shows the calls waiting right now, the 100 most recently posted keys, and the last 100 events: initializes (with the client's name), posts (and how many waits they woke), waits starting (and whether the client sent a progress token), waits ending (`message`, `timeout` or `client_gone`, with duration), deletes and expiry sweeps.
 
-That log is how to answer the open questions in the long-wait test:
+[research/long-waits.md](research/long-waits.md) lists what to check there after the first deploy.
 
-- **Does the client send a progress token?** See `progressToken` on `wait_start`.
-  Without one the relay falls back to SSE comment keepalives, which may not
-  reset the client's idle timer.
-- **How long does a session actually stay connected?** Look at `wait_end`.
-  `client_gone` after N minutes means the client or platform dropped the call.
-
-## Local development
+## Development
 
 ```bash
-printf 'SECRET=testsecret\nPING_SECONDS=5\n' > .dev.vars
-npx wrangler dev
-RELAY_URL=http://localhost:8787/testsecret/mcp npm test   # end-to-end smoke test
+mise run setup   # install tools and packages
+mise run ci      # lint, type-check and run the tests in workerd
+mise run dev     # run locally with test tokens: testsecret and testpost
+mise run smoke   # in a second terminal: end-to-end test against mise run dev
 ```
+
+The design decisions are in [docs/design.md](docs/design.md).
 
 ## Cost
 
-Free plan: 100,000 requests/day and 13,000 GB-s/day of Durable Object run time.
-While at least one wait is open the object is awake and billed as 128 MB,
-so the free run time covers about 29 hours of waiting per day, shared across
-all waits running at the same time. If you go over, calls error until the
-daily reset; there's no bill unless you move to the $5/month paid plan.
+The Workers free plan includes 100,000 requests a day and 13,000 GB-s of Durable Object run time a day. While at least one wait is open the object is awake and billed as 128 MB, so the free run time covers about 29 hours of waiting a day, shared by all waits running at once. If you go over, calls fail until the daily reset; there's no bill unless you move to the $5/month paid plan.
+
+## License
+
+[MIT](LICENSE)
