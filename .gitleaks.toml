@@ -1,0 +1,8 @@
+# The default rules, minus wrangler's local state, which holds the smoke
+# test's throwaway Durable Object data.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local wrangler state"
+paths = ['''^\.wrangler/''']
