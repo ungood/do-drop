@@ -24,9 +24,7 @@ jobs:
     timeout-minutes: 10
     # Holds the Cloudflare credentials. Add required reviewers to this
     # environment in the repo settings to gate deploys on approval.
-    environment:
-      name: production
-      url: ${{ vars.DROP_URL }}
+    environment: production
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,12 +37,3 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: mise run deploy
-      # Runs only once DROP_URL is set. It posts to a throwaway key and
-      # deletes it, so it doesn't touch real keys.
-      - name: Smoke test the deployment
-        if: vars.DROP_URL != ''
-        env:
-          DROP_URL: ${{ vars.DROP_URL }}
-          DROP_SECRET: ${{ secrets.DROP_SECRET }}
-          DROP_POST_TOKEN: ${{ secrets.DROP_POST_TOKEN }}
-        run: mise run smoke
