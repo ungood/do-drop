@@ -23,5 +23,8 @@
       "esbuild",
       "workerd"
     ]
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.4"
   }
 }

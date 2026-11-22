@@ -38,12 +38,8 @@ depends = ["check", "test"]
 
 [tasks.dev]
 depends = ["deps"]
-description = "Run the Worker locally with test secrets"
-run = "pnpm exec wrangler dev --var SECRET:testsecret --var POST_TOKEN:testpost --var PING_SECONDS:5"
-
-[tasks.smoke]
-description = "Run the end-to-end smoke test against a running DO Drop (local by default; set DROP_URL, DROP_SECRET and DROP_POST_TOKEN for a deployment)"
-run = "node test/smoke.mjs"
+description = "Run the Worker locally at https://localhost:8787, with owner password testpassword"
+run = "pnpm exec wrangler dev --local-protocol https --var OWNER_PASSWORD:testpassword --var PING_SECONDS:5"
 
 [tasks.deploy]
 depends = ["deps"]

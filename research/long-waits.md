@@ -1,6 +1,6 @@
 # Long waits
 
-Open questions to answer once DO Drop is deployed. The `/<SECRET>/debug` endpoint records what's needed: `initialize` events name the client, `wait_start` records whether it sent a progress token, and `wait_end` records the outcome (`message`, `timeout` or `client_gone`) and how long the call was open.
+Open questions to answer once DO Drop is deployed. The `/debug` page (owner password) records what's needed: `initialize` events name the client, `wait_start` records whether it sent a progress token, and `wait_end` records the outcome (`message`, `timeout`, `deleted` or `client_gone`) and how long the call was open.
 
 ## Does Claude send a progress token?
 

@@ -1,5 +1,5 @@
-# The default rules, minus wrangler's local state, which holds the smoke
-# test's throwaway Durable Object data.
+# The default rules, minus wrangler's local state, which holds throwaway
+# Durable Object data from `mise run dev`.
 [extend]
 useDefault = true
 

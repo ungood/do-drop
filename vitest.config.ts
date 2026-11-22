@@ -6,7 +6,7 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.toml" },
       miniflare: {
-        bindings: { SECRET: "testsecret", POST_TOKEN: "testpost", PING_SECONDS: "1" },
+        bindings: { OWNER_PASSWORD: "testpassword", PING_SECONDS: "1" },
       },
     }),
   ],

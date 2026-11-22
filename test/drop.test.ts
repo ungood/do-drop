@@ -1,17 +1,24 @@
 import { env, runDurableObjectAlarm, runInDurableObject, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
-import { EXPIRY_MS, MAX_MESSAGES_PER_KEY, MAX_PAYLOAD_BYTES } from "../src/limits";
+import { beforeEach, describe, expect, it } from "vitest";
+import { EXPIRY_MS, MAX_MESSAGES_PER_KEY, MAX_PAYLOAD_BYTES, SIGN_IN_MAX_FAILURES } from "../src/limits";
+import { BASE, REDIRECT, signIn, startSignIn, submit } from "./oauth";
 
-const BASE = "https://drop.test";
-const MCP = `${BASE}/testsecret/mcp`;
-const REST = `${BASE}/testpost/post`;
+const MCP = `${BASE}/mcp`;
+const DROP = `${BASE}/drop`;
 const H = { "Content-Type": "application/json", Accept: "application/json, text/event-stream" };
+
+let token = "";
+beforeEach(async () => {
+  token = await signIn();
+});
 
 let nextId = 1;
 type Rpc = { id?: number; result?: any; error?: any; method?: string; params?: any };
 
-function send(body: unknown, url = MCP) {
-  return SELF.fetch(url, { method: "POST", headers: H, body: JSON.stringify(body) });
+function send(body: unknown, bearer: string | null = token) {
+  const headers: Record<string, string> = { ...H };
+  if (bearer) headers.Authorization = `Bearer ${bearer}`;
+  return SELF.fetch(MCP, { method: "POST", headers, body: JSON.stringify(body) });
 }
 async function rpc(method: string, params: unknown = {}): Promise<Rpc> {
   return (await send({ jsonrpc: "2.0", id: nextId++, method, params })).json();
@@ -21,6 +28,11 @@ async function call(name: string, args: Record<string, unknown>): Promise<any> {
   return r.result;
 }
 const sc = async (name: string, args: Record<string, unknown>) => (await call(name, args)).structuredContent;
+
+/** Post to a key the way a page, phone or webhook would. */
+function drop(key: string, body: string, init: RequestInit = {}) {
+  return SELF.fetch(DROP, { method: "POST", headers: { Authorization: `Bearer ${key}` }, body, ...init });
+}
 
 /** Read an SSE response to the end; returns the JSON-RPC messages it carried. */
 async function readSse(res: Response): Promise<Rpc[]> {
@@ -44,6 +56,79 @@ function waitCall(args: Record<string, unknown>, progressToken?: string) {
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+describe("sign-in", () => {
+  it("challenges unauthenticated MCP calls and publishes OAuth metadata", async () => {
+    const r = await send({ jsonrpc: "2.0", id: 1, method: "tools/list" }, null);
+    expect(r.status).toBe(401);
+    expect(r.headers.get("WWW-Authenticate")).toContain("resource_metadata");
+    const bad = await send({ jsonrpc: "2.0", id: 1, method: "tools/list" }, "not-a-token");
+    expect(bad.status).toBe(401);
+
+    const prm: any = await (await SELF.fetch(`${BASE}/.well-known/oauth-protected-resource/mcp`)).json();
+    expect(prm.resource).toBe(MCP);
+    const as: any = await (await SELF.fetch(`${BASE}/.well-known/oauth-authorization-server`)).json();
+    expect(as.authorization_endpoint).toBe(`${BASE}/authorize`);
+    expect(as.registration_endpoint).toBe(`${BASE}/register`);
+  });
+
+  it("shows the client and where access goes, escaped, and can't be framed", async () => {
+    const s = await startSignIn();
+    expect(s.html).toContain("Test &#60;client&#62;");
+    expect(s.html).toContain("client.test");
+    expect(s.html).not.toContain("<client>");
+    const framing = `${s.page.headers.get("X-Frame-Options")} ${s.page.headers.get("Content-Security-Policy")}`;
+    expect(framing).toMatch(/DENY|frame-ancestors 'none'/);
+  });
+
+  it("refuses a wrong password, then accepts the right one on the same page", async () => {
+    const s = await startSignIn();
+    const wrong = await submit(s, "nope");
+    expect(wrong.status).toBe(403);
+    const right = await submit(s, "testpassword");
+    expect(right.status).toBe(302);
+    expect(right.headers.get("Location")).toMatch(new RegExp(`^${REDIRECT}\\?.*code=`));
+  });
+
+  it("sends Deny back to the client as access_denied", async () => {
+    const r = await submit(await startSignIn(), "", "deny");
+    expect(r.status).toBe(302);
+    expect(new URL(r.headers.get("Location") ?? "").searchParams.get("error")).toBe("access_denied");
+  });
+
+  it(`locks after ${SIGN_IN_MAX_FAILURES} wrong passwords, even for the right one`, async () => {
+    // Storage is shared across tests, so start and end with no recorded failures.
+    const stub = env.DROP.get(env.DROP.idFromName("main"));
+    const reset = () =>
+      runInDurableObject(stub, async (_drop, state) => {
+        state.storage.sql.exec("DELETE FROM sign_in_failures");
+      });
+    await reset();
+    try {
+      const s = await startSignIn();
+      for (let i = 0; i < SIGN_IN_MAX_FAILURES; i++) expect((await submit(s, `wrong-${i}`)).status).toBe(403);
+      expect((await submit(s, "testpassword")).status).toBe(429);
+      const basic = await SELF.fetch(`${BASE}/debug`, {
+        headers: { Authorization: `Basic ${btoa("me:testpassword")}` },
+      });
+      expect(basic.status).toBe(429);
+    } finally {
+      await reset();
+    }
+  });
+
+  it("puts /debug behind the owner password", async () => {
+    expect((await SELF.fetch(`${BASE}/debug`)).status).toBe(401);
+    const wrong = await SELF.fetch(`${BASE}/debug`, { headers: { Authorization: `Basic ${btoa("me:nope")}` } });
+    expect(wrong.status).toBe(401);
+    await sc("post", { key: "dbg", payload: 1 });
+    const d: any = await (
+      await SELF.fetch(`${BASE}/debug`, { headers: { Authorization: `Basic ${btoa("me:testpassword")}` } })
+    ).json();
+    expect(d.keys.some((k: { key: string }) => k.key === "dbg")).toBe(true);
+    expect(d.log.some((e: { ev: string }) => e.ev === "post")).toBe(true);
+  });
+});
+
 describe("MCP protocol", () => {
   it("initializes, accepts notifications and lists the four tools", async () => {
     const init = await rpc("initialize", {
@@ -66,7 +151,11 @@ describe("MCP protocol", () => {
 
   it("rejects unknown methods and bad JSON", async () => {
     expect((await rpc("nope")).error.code).toBe(-32601);
-    const bad = await SELF.fetch(MCP, { method: "POST", headers: H, body: "{" });
+    const bad = await SELF.fetch(MCP, {
+      method: "POST",
+      headers: { ...H, Authorization: `Bearer ${token}` },
+      body: "{",
+    });
     expect(bad.status).toBe(400);
   });
 
@@ -75,26 +164,6 @@ describe("MCP protocol", () => {
     expect((await call("get", { key: "a".repeat(201) })).isError).toBe(true);
     expect((await call("get", { key: "k", afterSeq: -1 })).isError).toBe(true);
     expect((await call("frob", { key: "k" })).isError).toBe(true);
-  });
-});
-
-describe("auth", () => {
-  it("hides everything behind the right token", async () => {
-    expect((await send({}, `${BASE}/wrong/mcp`)).status).toBe(404);
-    expect((await send({}, `${BASE}/testsecret/other`)).status).toBe(404);
-    expect((await send({}, `${BASE}/testsecret/mcp/extra`)).status).toBe(404);
-    expect((await SELF.fetch(`${BASE}/`)).status).toBe(404);
-  });
-
-  it("keeps the post token post-only", async () => {
-    expect((await send({}, `${BASE}/testpost/mcp`)).status).toBe(404);
-    expect((await SELF.fetch(`${BASE}/testpost/debug`)).status).toBe(404);
-    expect((await SELF.fetch(`${REST}/k`)).status).toBe(405);
-  });
-
-  it("does not accept the MCP secret on the post endpoint", async () => {
-    const r = await SELF.fetch(`${BASE}/testsecret/post/k`, { method: "POST", body: "{}" });
-    expect(r.status).toBe(404);
   });
 });
 
@@ -126,10 +195,11 @@ describe("post, get and delete", () => {
     expect((await sc("get", { key: "one", afterSeq: 0 })).messages).toHaveLength(1);
   });
 
-  it("deletes a key, and never reuses its seqs", async () => {
+  it("deletes a key, closes it to public posts, and never reuses its seqs", async () => {
     const first = await sc("post", { key: "del", payload: 1 });
     await sc("post", { key: "del", payload: 2 });
     expect(await sc("delete", { key: "del" })).toMatchObject({ status: "deleted", messages: 2 });
+    expect((await drop("del", "x")).status).toBe(404);
     expect((await sc("get", { key: "del" })).status).toBe("empty");
     const again = await sc("post", { key: "del", payload: 3 });
     expect(again.seq).toBeGreaterThan(first.seq + 1);
@@ -194,61 +264,83 @@ describe("wait", () => {
     expect(final?.result.structuredContent).toMatchObject({ seq: fresh.seq, payload: "new" });
   });
 
-  it("wakes from the REST endpoint", async () => {
-    const { id, res } = waitCall({ key: "phone", timeoutMinutes: 1 });
+  it("wakes from a public post", async () => {
+    const { id, res } = waitCall({ key: "phone-7f3a9c", timeoutMinutes: 1 });
     const pending = res.then(readSse);
     await sleep(300);
-    const r = await SELF.fetch(`${REST}/phone`, { method: "POST", body: JSON.stringify({ from: "shortcut" }) });
-    expect(await r.json()).toMatchObject({ key: "phone", woke: 1 });
+    const r = await drop("phone-7f3a9c", JSON.stringify({ from: "shortcut" }));
+    expect(await r.json()).toMatchObject({ woke: 1 });
     const final = (await pending).find((m) => m.id === id);
     expect(final?.result.structuredContent.payload).toEqual({ from: "shortcut" });
   });
+
+  it("returns deleted when the key is deleted while waiting", async () => {
+    const { id, res } = waitCall({ key: "gone", timeoutMinutes: 1 });
+    const pending = res.then(readSse);
+    await sleep(300);
+    await sc("delete", { key: "gone" });
+    const final = (await pending).find((m) => m.id === id);
+    expect(final?.result.structuredContent).toEqual({ status: "deleted", key: "gone" });
+  });
 });
 
-describe("REST post", () => {
+describe("public post", () => {
+  it("only accepts keys the owner has opened", async () => {
+    expect((await drop("never-opened", "1")).status).toBe(404);
+    await sc("get", { key: "opened" });
+    expect((await drop("opened", "1")).status).toBe(200);
+  });
+
+  it("needs the key as a bearer token", async () => {
+    await sc("get", { key: "hdr" });
+    expect((await SELF.fetch(DROP, { method: "POST", body: "1" })).status).toBe(404);
+    const basic = await SELF.fetch(DROP, { method: "POST", headers: { Authorization: "Basic aGRy" }, body: "1" });
+    expect(basic.status).toBe(404);
+    expect((await drop("bad key!", "1")).status).toBe(404);
+    expect((await SELF.fetch(DROP)).status).toBe(405);
+  });
+
   it("stores JSON as JSON and anything else as a string", async () => {
-    await SELF.fetch(`${REST}/rest`, { method: "POST", body: '{"a":1}' });
-    await SELF.fetch(`${REST}/rest`, { method: "POST", body: "hello" });
-    const all = await sc("get", { key: "rest", afterSeq: 0 });
+    await sc("get", { key: "pub" });
+    await drop("pub", '{"a":1}');
+    await drop("pub", "hello");
+    const all = await sc("get", { key: "pub", afterSeq: 0 });
     expect(all.messages.map((m: { payload: unknown }) => m.payload)).toEqual([{ a: 1 }, "hello"]);
   });
 
-  it("decodes the key and validates it", async () => {
-    await SELF.fetch(`${REST}/a%3Ab`, { method: "POST", body: "1" });
-    expect((await sc("get", { key: "a:b" })).messages[0].payload).toBe(1);
-    expect((await SELF.fetch(`${REST}/bad%20key`, { method: "POST", body: "1" })).status).toBe(400);
+  it("caps payload size", async () => {
+    await sc("get", { key: "big" });
+    expect((await drop("big", "x".repeat(MAX_PAYLOAD_BYTES + 1))).status).toBe(413);
   });
 
-  it("caps payload size", async () => {
-    const r = await SELF.fetch(`${REST}/big`, { method: "POST", body: "x".repeat(MAX_PAYLOAD_BYTES + 1) });
-    expect(r.status).toBe(413);
+  it("allows cross-origin posts from pages", async () => {
+    const pre = await SELF.fetch(DROP, {
+      method: "OPTIONS",
+      headers: { Origin: "https://page.test", "Access-Control-Request-Headers": "authorization,content-type" },
+    });
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(pre.headers.get("Access-Control-Allow-Headers")).toMatch(/Authorization/);
+    await sc("get", { key: "cors" });
+    expect((await drop("cors", "1")).headers.get("Access-Control-Allow-Origin")).toBe("*");
   });
 });
 
 describe("expiry", () => {
-  it("deletes keys idle for 14 days and keeps the rest", async () => {
+  it("deletes keys unused for 14 days and keeps the rest", async () => {
     await sc("post", { key: "stale", payload: 1 });
     await sc("post", { key: "fresh", payload: 2 });
     const stub = env.DROP.get(env.DROP.idFromName("main"));
     await runInDurableObject(stub, async (_drop, state) => {
       expect(await state.storage.getAlarm()).not.toBeNull();
-      state.storage.sql.exec("UPDATE messages SET posted_at = ? WHERE key = 'stale'", Date.now() - EXPIRY_MS - 1000);
+      state.storage.sql.exec("UPDATE keys SET touched_at = ? WHERE key = 'stale'", Date.now() - EXPIRY_MS - 1000);
     });
     expect(await runDurableObjectAlarm(stub)).toBe(true);
-    expect((await sc("get", { key: "stale" })).status).toBe("empty");
-    expect((await sc("get", { key: "fresh" })).status).toBe("ok");
+    expect((await drop("stale", "1")).status).toBe(404);
+    expect((await drop("fresh", "1")).status).toBe(200);
     await runInDurableObject(stub, async (_drop, state) => {
       expect(await state.storage.getAlarm()).not.toBeNull();
     });
-  });
-});
-
-describe("debug", () => {
-  it("shows keys and events", async () => {
-    await sc("post", { key: "dbg", payload: 1 });
-    const d: any = await (await SELF.fetch(`${BASE}/testsecret/debug`)).json();
-    expect(d.keys.some((k: { key: string }) => k.key === "dbg")).toBe(true);
-    expect(d.log.some((e: { ev: string }) => e.ev === "post")).toBe(true);
   });
 });
 
