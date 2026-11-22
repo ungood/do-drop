@@ -15,7 +15,7 @@ Everything runs through mise. Run `mise run setup` once, then:
 
 Done means `mise run ci` passes and `mise run smoke` passes against `mise run dev`.
 
-Every merge to `main` deploys to production: the Push to Main workflow runs CI, `mise run deploy` and then `mise run smoke` against the live Worker. Don't merge anything that isn't ready to ship.
+Every merge to `main` deploys to production: the Push to Main workflow runs CI and then `mise run deploy`. Don't merge anything that isn't ready to ship.
 
 ## Layout
 
