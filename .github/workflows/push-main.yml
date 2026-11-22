@@ -16,3 +16,35 @@ jobs:
   ci:
     name: CI
     uses: ungood/standards/.github/workflows/ci.yml@26f872057cc96483a7e6b4e293dfe8acaa3778c8 # v1.0.0
+
+  deploy:
+    name: Deploy
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Holds the Cloudflare credentials. Add required reviewers to this
+    # environment in the repo settings to gate deploys on approval.
+    environment:
+      name: production
+      url: ${{ vars.DROP_URL }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install tools
+        uses: jdx/mise-action@6612f0ef07ed2a736cd1e00a94a065522dd41195 # v5.2.5
+      - name: Deploy the Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: mise run deploy
+      # Runs only once DROP_URL is set. It posts to a throwaway key and
+      # deletes it, so it doesn't touch real keys.
+      - name: Smoke test the deployment
+        if: vars.DROP_URL != ''
+        env:
+          DROP_URL: ${{ vars.DROP_URL }}
+          DROP_SECRET: ${{ secrets.DROP_SECRET }}
+          DROP_POST_TOKEN: ${{ secrets.DROP_POST_TOKEN }}
+        run: mise run smoke

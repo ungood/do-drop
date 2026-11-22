@@ -81,6 +81,21 @@ You need a Cloudflare account (the free plan is enough) and [mise](https://mise.
 
 Your MCP endpoint is `https://do-drop.<you>.workers.dev/<SECRET>/mcp`. Anyone with that URL can read and post to every key, so treat it like a password. To rotate a token, run `secret put` again; the change applies without a redeploy.
 
+## Continuous deployment
+
+Every merge to `main` deploys. The Push to Main workflow runs CI, then a `deploy` job in the `production` environment runs `mise run deploy`, then runs the smoke test against the live Worker. `SECRET` and `POST_TOKEN` stay in Cloudflare; a deploy doesn't change them.
+
+To set it up:
+
+1. In the Cloudflare dashboard, go to **My Profile**, then **API Tokens**, then **Create Token**, and use the **Edit Cloudflare Workers** template. Limit it to your account and save the token in your password manager.
+2. Copy your account ID from the Workers & Pages overview page.
+3. In the GitHub repo, go to **Settings**, then **Environments**, and create an environment named `production`. Add these to it:
+   - **Secrets:** `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and for the smoke test, `DROP_SECRET` and `DROP_POST_TOKEN` (the same values you gave Wrangler).
+   - **Variable:** `DROP_URL`, such as `https://do-drop.<you>.workers.dev`. The smoke test is skipped until it's set.
+   - **Optional:** add yourself as a required reviewer to approve each deploy, and limit the environment to the `main` branch.
+
+You still create `SECRET` and `POST_TOKEN` once with `wrangler secret put` (step 3 of [Deploy](#deploy)). After that, merging is deploying.
+
 ## Connect it to Claude
 
 claude.ai, then Settings, Connectors, **Add custom connector**:
