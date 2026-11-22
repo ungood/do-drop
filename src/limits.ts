@@ -5,3 +5,7 @@ export const EXPIRY_MS = 14 * 24 * 60 * 60 * 1000;
 /** Sign-in locks after this many wrong passwords within the window. */
 export const SIGN_IN_MAX_FAILURES = 10;
 export const SIGN_IN_WINDOW_MS = 15 * 60 * 1000;
+/** wait returns "timeout" after this long by default: under the 60 s some clients allow a tool call. */
+export const DEFAULT_WAIT_SECONDS = 50;
+/** The longest wait. Abandoned waits keep the Durable Object awake until they time out, so keep this short. */
+export const MAX_WAIT_SECONDS = 600;

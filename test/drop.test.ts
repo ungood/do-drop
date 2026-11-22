@@ -1,6 +1,12 @@
 import { env, runDurableObjectAlarm, runInDurableObject, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { EXPIRY_MS, MAX_MESSAGES_PER_KEY, MAX_PAYLOAD_BYTES, SIGN_IN_MAX_FAILURES } from "../src/limits";
+import {
+  EXPIRY_MS,
+  MAX_MESSAGES_PER_KEY,
+  MAX_PAYLOAD_BYTES,
+  MAX_WAIT_SECONDS,
+  SIGN_IN_MAX_FAILURES,
+} from "../src/limits";
 import { BASE, REDIRECT, signIn, startSignIn, submit } from "./oauth";
 
 const MCP = `${BASE}/mcp`;
@@ -233,7 +239,7 @@ describe("wait", () => {
   });
 
   it("blocks, sends progress pings, and returns what gets posted", async () => {
-    const { id, res } = waitCall({ key: "block", timeoutMinutes: 1 }, "tok");
+    const { id, res } = waitCall({ key: "block", timeoutSeconds: 60 }, "tok");
     const pending = res.then(async (r) => {
       expect(r.headers.get("content-type")).toMatch(/^text\/event-stream/);
       return readSse(r);
@@ -256,7 +262,7 @@ describe("wait", () => {
 
   it("ignores messages at or before afterSeq", async () => {
     const old = await sc("post", { key: "after", payload: "old" });
-    const { id, res } = waitCall({ key: "after", afterSeq: old.seq, timeoutMinutes: 1 });
+    const { id, res } = waitCall({ key: "after", afterSeq: old.seq, timeoutSeconds: 60 });
     const pending = res.then(readSse);
     await sleep(300);
     const fresh = await sc("post", { key: "after", payload: "new" });
@@ -265,7 +271,7 @@ describe("wait", () => {
   });
 
   it("wakes from a public post", async () => {
-    const { id, res } = waitCall({ key: "phone-7f3a9c", timeoutMinutes: 1 });
+    const { id, res } = waitCall({ key: "phone-7f3a9c", timeoutSeconds: 60 });
     const pending = res.then(readSse);
     await sleep(300);
     const r = await drop("phone-7f3a9c", JSON.stringify({ from: "shortcut" }));
@@ -284,7 +290,7 @@ describe("wait", () => {
         jsonrpc: "2.0",
         id,
         method: "tools/call",
-        params: { name: "wait", arguments: { key: "hangup", timeoutMinutes: 1 } },
+        params: { name: "wait", arguments: { key: "hangup", timeoutSeconds: 60 } },
       }),
       signal: abort.signal,
     });
@@ -300,8 +306,39 @@ describe("wait", () => {
     expect(end?.outcome).toBe("client_gone");
   });
 
+  it("times out with status timeout, and a later wait still gets what was posted meanwhile", async () => {
+    const { id, res } = waitCall({ key: "late", timeoutSeconds: 2 });
+    const final = (await res.then(readSse)).find((m) => m.id === id);
+    expect(final?.result.structuredContent).toMatchObject({ status: "timeout", key: "late", afterSeq: 0 });
+    await drop("late", '"answered while nobody waited"');
+    expect(await sc("wait", { key: "late", timeoutSeconds: 2 })).toMatchObject({
+      status: "message",
+      payload: "answered while nobody waited",
+    });
+  });
+
+  it("rejects the old timeoutMinutes argument and caps timeoutSeconds", async () => {
+    expect((await call("wait", { key: "old", timeoutMinutes: 1 })).isError).toBe(true);
+    const list = await rpc("tools/list");
+    const wait = list.result.tools.find((t: { name: string }) => t.name === "wait");
+    expect(wait.inputSchema.properties.timeoutSeconds.maximum).toBe(MAX_WAIT_SECONDS);
+  });
+
+  it("logs cancellations from clients that give up", async () => {
+    const note = await send({
+      jsonrpc: "2.0",
+      method: "notifications/cancelled",
+      params: { requestId: 42, reason: "timeout" },
+    });
+    expect(note.status).toBe(202);
+    const d: any = await (
+      await SELF.fetch(`${BASE}/debug`, { headers: { Authorization: `Basic ${btoa("me:testpassword")}` } })
+    ).json();
+    expect(d.log.find((e: { ev: string }) => e.ev === "cancelled")).toMatchObject({ requestId: 42, reason: "timeout" });
+  });
+
   it("returns deleted when the key is deleted while waiting", async () => {
-    const { id, res } = waitCall({ key: "gone", timeoutMinutes: 1 });
+    const { id, res } = waitCall({ key: "gone", timeoutSeconds: 60 });
     const pending = res.then(readSse);
     await sleep(300);
     await sc("delete", { key: "gone" });
