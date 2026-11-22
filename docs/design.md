@@ -2,7 +2,9 @@
 
 ## Why DO Drop exists
 
-Scheduled and headless Claude sessions sometimes need to ask a person something and get the answer back in the same session. `AskUserQuestion` isn't available in headless runs, and an artifact's "Send to Claude" comment wakes an arbitrary session, not the one that asked. A remote MCP tool that blocks until the answer arrives solves this. The Questionnaire artifact is the first client, but the drop itself stays generic: anything that can make an HTTP request can hand data back to a waiting session.
+An AI session that runs on its own, on a schedule or in the background, sometimes needs something from outside before it can go on: an answer from a person, a result from a phone shortcut, a webhook firing. Without a channel back to that same session, the answer arrives somewhere else, or not at all. DO Drop is that channel: the session blocks on `wait`, and whatever answers posts to the drop.
+
+It started as a way for a question page to hand a person's answers back to the session that asked. The drop itself is generic: anything that can make an HTTP request, or call an MCP tool, can hand data back to a waiting session.
 
 ## Decisions
 
@@ -20,16 +22,11 @@ Scheduled and headless Claude sessions sometimes need to ask a person something 
 - **Debug behind Basic auth:** `/debug` is for a browser, which can't hold an OAuth token, so it takes the owner password through HTTP Basic auth, sharing the sign-in lockout.
 - **No smoke test:** the workerd tests cover the whole flow, sign-in included, so there's no end-to-end test against a running Worker, and CI holds no DO Drop credentials.
 - **MCP without the SDK:** the server speaks Streamable HTTP directly. Responses are JSON, except a blocking `wait`, which streams SSE. It's stateless at the MCP layer (no `Mcp-Session-Id`). While waiting, it sends `notifications/progress` every `PING_SECONDS` if the client passed a `progressToken`, and SSE comment keepalives otherwise.
+- **Pings every 20 seconds:** some clients give up on a tool call after a fixed time unless progress resets their timer; Claude Code's limit is 60 seconds. `PING_SECONDS` stays well under the shortest such limit.
+- **Hang-ups end the wait:** a client that gives up closes its request, but the response stream can keep accepting writes into a buffer nobody reads, so a failed write doesn't reliably reveal it. The wait listens on `request.signal` instead (the `enable_request_signal` and `request_signal_passthrough` compatibility flags carry it from the Worker to the Durable Object) and ends at once, so an abandoned wait stops keeping the object awake.
+- **Pages in a sandbox post through MCP:** a page whose sandbox blocks requests to other sites, such as a claude.ai artifact, can't reach `POST /drop`. It calls the `post` tool through its MCP connector instead, using the viewer's sign-in.
 - **Name:** the repo, Worker and npm package are `do-drop`; docs and the claude.ai connector say **DO Drop**. "Cloudflare" stays out of the name. The logo is a dewdrop.
 
 ## Cost
 
 On the Workers free plan, Durable Objects get 13,000 GB-s of run time a day. While any wait is open the object is awake and billed as 128 MB, so the free allowance covers about 29 hours of open waiting a day, shared by every wait running at once. Past that, calls fail until the daily reset; nothing is billed unless the account moves to the $5/month paid plan.
-
-## Questionnaire client
-
-The Questionnaire artifact (`reference/questionnaire-artifact.html`) still calls the prototype's `submit_answers` tool on a connector named "Questionnaire Relay". Once DO Drop is deployed:
-
-- The `questionnaire` skill should give each set a long random key, call `wait(key)` on DO Drop (which opens it), and hand the page the key along with the set.
-- The page's Submit should `fetch` `POST /drop` with `Authorization: Bearer <key>` and the answers document as the body. If artifacts can't reach outside URLs, it can instead call `post(key, payload)` through the "DO Drop" connector, which carries the owner's sign-in.
-- The answers come back as the message's `payload`, in the page's format.

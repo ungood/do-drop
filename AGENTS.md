@@ -22,7 +22,6 @@ Every merge to `main` deploys to production: the Push to Main workflow runs CI a
 - `src/auth.ts`: the sign-in page and HTTP Basic auth for `/debug`, both checking `OWNER_PASSWORD`.
 - `src/limits.ts`: limits shared with the tests.
 - `test/drop.test.ts`: Vitest tests. `test/oauth.ts`: helpers that sign in the way claude.ai does.
-- `reference/questionnaire-artifact.html`: the Questionnaire page, the first client. Not part of the build.
 
 ## Rules
 
