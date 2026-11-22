@@ -274,6 +274,32 @@ describe("wait", () => {
     expect(final?.result.structuredContent.payload).toEqual({ from: "shortcut" });
   });
 
+  it("ends the wait on the server when the client hangs up", async () => {
+    const abort = new AbortController();
+    const id = nextId++;
+    const res = SELF.fetch(MCP, {
+      method: "POST",
+      headers: { ...H, Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: { name: "wait", arguments: { key: "hangup", timeoutMinutes: 1 } },
+      }),
+      signal: abort.signal,
+    });
+    await (await res).body?.getReader().read(); // the stream is open
+    abort.abort();
+    await sleep(300);
+    // Nobody is waiting any more, so a post wakes no one and the log records the hang-up.
+    expect((await sc("post", { key: "hangup", payload: 1 })).woke).toBe(0);
+    const d: any = await (
+      await SELF.fetch(`${BASE}/debug`, { headers: { Authorization: `Basic ${btoa("me:testpassword")}` } })
+    ).json();
+    const end = d.log.find((e: { ev: string; key: string }) => e.ev === "wait_end" && e.key === "hangup");
+    expect(end?.outcome).toBe("client_gone");
+  });
+
   it("returns deleted when the key is deleted while waiting", async () => {
     const { id, res } = waitCall({ key: "gone", timeoutMinutes: 1 });
     const pending = res.then(readSse);
