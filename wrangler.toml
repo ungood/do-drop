@@ -1,6 +1,12 @@
 name = "do-drop"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
+# The OAuth library fetches clients' metadata documents; this keeps those
+# fetches on the public internet.
+compatibility_flags = ["global_fetch_strictly_public"]
+# Serve at do-drop.<subdomain>.workers.dev, with no per-version preview URLs.
+workers_dev = true
+preview_urls = false
 
 [vars]
 # Seconds between progress pings while a wait is open. Must stay well under
@@ -15,5 +21,9 @@ class_name = "Drop"
 tag = "v1"
 new_sqlite_classes = ["Drop"]
 
-# SECRET (the MCP URL's path segment) and POST_TOKEN (the post-only REST
-# endpoint's) are secrets: set them with `pnpm exec wrangler secret put <NAME>`.
+# OAuth clients, grants and tokens. With no id, wrangler deploy creates the
+# namespace on first deploy and reuses it after.
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+
+# OWNER_PASSWORD is a secret: set it with `pnpm exec wrangler secret put OWNER_PASSWORD`.
