@@ -2,10 +2,10 @@
 
 A dead drop for AI sessions: post from anywhere, and the waiting session gets it.
 
-DO Drop is a small remote MCP server. A Claude session picks a key and calls `wait` on it. A web page, phone shortcut, webhook or another session posts a JSON payload to that key, and the waiting call returns it, in the same session that asked.
+DO Drop is a small remote MCP server. An AI session, such as Claude, picks a key and calls `wait` on it. A web page, phone shortcut, webhook or another session posts a JSON payload to that key, and the waiting call returns it, in the same session that asked.
 
 ```text
-session ──wait(key)──────────────▶ DO Drop   (held open; progress ping every 60 s)
+session ──wait(key)──────────────▶ DO Drop   (held open; progress ping every 20 s)
 page    ──POST /drop, Bearer key─▶ DO Drop   (no sign-in: the key is the secret)
 DO Drop ──payload────────────────▶ session   (the waiting call returns)
 ```
@@ -14,7 +14,7 @@ It runs as one Cloudflare Worker and one SQLite-backed Durable Object ("DO" Drop
 
 ## How access works
 
-- **The MCP server needs sign-in.** Claude connects with OAuth, and you approve it once with the owner password. Only signed-in clients can wait, read, post or delete.
+- **The MCP server needs sign-in.** Your MCP client connects with OAuth, and you approve it once with the owner password. Only signed-in clients can wait, read, post or delete.
 - **A key is the shared secret.** The session chooses a key (make it long and random), and using it opens the drop. Then the session gives the key to whatever will answer. That side posts with the key as a bearer token, needs no account, and can only post to that one key.
 - **Unopened keys don't exist.** Posting to a key no signed-in session has used gets `404`, so nobody can make up keys or fill up storage.
 
@@ -42,6 +42,8 @@ curl -X POST "https://do-drop.<you>.workers.dev/drop" \
 ```
 
 A JSON body is stored as JSON; anything else is stored as a string. The response is `{"seq", "woke"}`, or `404` if the key isn't open. The endpoint allows cross-origin requests, so a web page can post with `fetch`.
+
+A page whose sandbox blocks requests to other sites, such as a claude.ai artifact, can't reach this endpoint. It can call the `post` tool through the viewer's DO Drop connector instead.
 
 ## Deploy
 
