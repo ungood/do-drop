@@ -1,0 +1,19 @@
+name = "do-drop"
+main = "src/index.ts"
+compatibility_date = "2025-11-01"
+
+[vars]
+# Seconds between progress pings while wait_for_answers is open.
+# Must stay well under the client's idle timeout (5 minutes for remote MCP).
+PING_SECONDS = "60"
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]
+
+# SECRET is set with `npx wrangler secret put SECRET` (never commit it).
+# For local dev, put SECRET=... in a .dev.vars file.
